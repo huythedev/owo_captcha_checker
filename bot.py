@@ -1,4 +1,6 @@
 import discord
+import re
+import unicodedata
 from discord.ext import commands
 import os
 import requests
@@ -60,6 +62,10 @@ def send_telegram_message(text, chat_id=None):
     except Exception as e:
         print(f'Error sending Telegram message: {e}')
 
+def normalize_text(text):
+    # Remove zero-width and invisible characters
+    return ''.join(c for c in unicodedata.normalize('NFKC', text) if not unicodedata.category(c).startswith('C'))
+
 @bot.event
 async def on_message(message):
     print(f'New message from {message.author} in channel {getattr(message.channel, "id", None)}: {message.content}')
@@ -67,26 +73,62 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
-    # Check specific server channels for each user
-    for discord_id, channel_id in server_channel_map.items():
-        if message.channel.id == channel_id:
-            if any(word in message.content.lower() for word in wordlist):
-                detected_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                print('Captcha detected! Verify here: https://owobot.com/captcha')
-                print(f'Time: {detected_time}')
-                chat_id = notification_map.get(discord_id, TELEGRAM_CHAT_ID)
-                print(f'Sending Telegram message to chat_id={chat_id}: Captcha detected! Verify here: https://owobot.com/captcha\nTime: {detected_time}')
-                send_telegram_message(f'Captcha detected! Verify here: https://owobot.com/captcha\nTime: {detected_time}', chat_id)
+    # Normalize message content
+    content = normalize_text(message.content.lower())
+    normalized_wordlist = [normalize_text(word) for word in wordlist]
+
+    # Check for wordlist match in server channels
+    if message.channel.id in server_channel_map.values():
+        matched = False
+        for word in normalized_wordlist:
+            # Use substring match for unicode symbols, regex for normal words
+            if len(word) == 1 or not word.isascii():
+                if word in content:
+                    matched = True
+                    print(f"Matched unicode/symbol word: {word}")
+                    break
+            else:
+                if re.search(rf'\b{re.escape(word)}\b', content):
+                    matched = True
+                    print(f"Matched word: {word}")
+                    break
+        if matched:
+            detected_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            print('Captcha detected! Verify here: https://owobot.com/captcha')
+            print(f'Time: {detected_time}')
+            # Find the discord_id for this channel
+            discord_id = None
+            for did, cid in server_channel_map.items():
+                if cid == message.channel.id:
+                    discord_id = did
+                    break
+            chat_id = notification_map.get(discord_id, TELEGRAM_CHAT_ID)
+            print(f'Sending Telegram message to chat_id={chat_id}: Captcha detected! Verify here: https://owobot.com/captcha\nTime: {detected_time}')
+            sender = str(message.author)
+            send_telegram_message(f'Sender: {sender}\nCaptcha detected! Verify here: https://owobot.com/captcha\nTime: {detected_time}', chat_id)
 
     # Check DM channel for multiple users
     if isinstance(message.channel, discord.DMChannel) and message.author.id in dm_user_ids:
-        if any(word in message.content.lower() for word in wordlist):
+        matched = False
+        for word in normalized_wordlist:
+            if len(word) == 1 or not word.isascii():
+                if word in content:
+                    matched = True
+                    print(f"Matched unicode/symbol word: {word}")
+                    break
+            else:
+                if re.search(rf'\b{re.escape(word)}\b', content):
+                    matched = True
+                    print(f"Matched word: {word}")
+                    break
+        if matched:
             detected_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             print('Captcha detected!')
             print(f'Time: {detected_time}')
             chat_id = notification_map.get(message.author.id, TELEGRAM_CHAT_ID)
             print(f'Sending Telegram message to chat_id={chat_id}: Captcha detected!\nTime: {detected_time}')
-            send_telegram_message(f'Captcha detected!\nTime: {detected_time}', chat_id)
+            sender = str(message.author)
+            send_telegram_message(f'Sender: {sender}\nCaptcha detected!\nTime: {detected_time}', chat_id)
 
     await bot.process_commands(message)
 
